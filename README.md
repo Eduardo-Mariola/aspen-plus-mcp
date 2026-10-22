@@ -1,12 +1,64 @@
-# Aspen Plus MCP
+# Aspen Plus V15 MCP — with Column Internals
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](https://www.microsoft.com/windows)
 
-**Talk to Aspen Plus in natural language.** An MCP (Model Context Protocol) server that bridges AI agents with Aspen Plus v15 via COM automation. 85 tools for parameter tuning, sensitivity analysis, convergence diagnostics, and result reading.
+**Talk to Aspen Plus in natural language.** An MCP (Model Context Protocol) server that bridges AI agents
+(Claude Code, Claude Desktop, any MCP client) with Aspen Plus V15 via COM automation — now including
+**RadFrac Column Internals**: tray and packed sections, hydraulics, tray efficiency and column height.
 
-> **English** · **中文 (见下方)**
+Maintained by **Eduardo Mariola** (Chemical Engineering, UNESP). Built on top of
+[thirakorn-mokkawes-59/aspen-mcp](https://github.com/thirakorn-mokkawes-59/aspen-mcp) (MIT) — see
+[Credits](#credits).
+
+> **English** · **Português (abaixo)** · **中文 (upstream docs, further down)**
+
+## What this version adds
+
+None of the public Aspen MCP servers could touch Column Internals, so tray columns came out of the
+economic evaluation with default 24-in spacing and absurd heights. This version adds:
+
+| Area | What changed |
+|---|---|
+| **Column Internals (new, 13 tools)** | Create `INT-1`, add tray/packed sections over stage ranges, set tray type, passes, spacing, diameter, deck gauge, weir height, hole size, downcomer clearance, overall efficiency; interactive sizing or rating; read flooding, downcomer backup, pressure drop; O'Connell efficiency from the converged column; tangent-to-tangent height and L/D |
+| **Open files the right way** | `.apw` with `InitFromFile2`, `.bkp` with `InitFromArchive2` (archive-loading an `.apw` leaves the tree empty) |
+| **Work in the user's window** | `attach()` binds to a simulation already open in the Aspen GUI through the Running Object Table |
+| **Low-memory machines** | if DCOM cannot start `aspenplus.exe -Automation` (APED LocalDB error 575), `open_file()` launches `AspenPlus.exe` and attaches |
+| **Long runs** | `Engine.Run2(True)` + polling, so a 100 s run never trips the per-call COM timeout |
+| **Fixes** | convergence report returned nothing (missing `return`); hard-coded path in `new_simulation` |
+
+Validated on a five-column benzyl alcohol process (Aspen Plus V15): tray internals defined for four
+columns through MCP calls, file re-opened from scratch and run with `PER_ERROR = 0`.
+
+### Column Internals in 6 calls
+
+```text
+attach("C:\\path\\plant.apw")
+add_column_internals("T-102")                                  # creates INT-1, makes it active
+add_internals_section("T-102", "CS-1", 2, 15, "TRAY")          # stages 2..N-1
+configure_tray_section("T-102", "CS-1", tray_type="SIEVE", tray_spacing_m=0.30,
+                       mode="RATING", diameter_m=0.45, deck_thickness="14 GAUGE",
+                       weir_height_mm=50, overall_efficiency=0.58)
+reinit_and_run()
+get_column_hydraulics("T-102")      # % flood, downcomer backup, ΔP per section
+column_height_estimate("T-102")     # real trays, tangent-to-tangent height, L/D
+```
+
+### Register in Claude Code
+
+```bash
+claude mcp add --scope user aspen-plus -- "C:\path\to\aspen-plus-mcp\.venv\Scripts\python.exe" -m aspen_mcp.server
+```
+
+## Em português
+
+Servidor MCP para controlar o **Aspen Plus V15** por linguagem natural (Claude Code, Claude Desktop ou
+qualquer cliente MCP). Esta versão acrescenta o que faltava nos servidores públicos: **internos de
+coluna da RadFrac** — seções de pratos e de recheio, espaçamento, diâmetro, espessura do prato,
+vertedor, furos, eficiência global, hidráulica (inundação, retenção no downcomer, perda de carga),
+eficiência de O'Connell e altura tangente-a-tangente. Também abre `.apw` corretamente, trabalha na
+janela do Aspen que já está aberta (ROT) e aguenta corridas longas em máquinas com pouca memória.
 
 ---
 
@@ -31,11 +83,11 @@
 ### Installation
 
 ```bash
-git clone https://github.com/ddtlxc001/aspen-mcp.git
-cd aspen-mcp
-python -m venv venv
-venv\Scripts\pip install -e .
-venv\Scripts\aspen-mcp
+git clone https://github.com/Eduardo-Mariola/aspen-plus-mcp.git
+cd aspen-plus-mcp
+python -m venv .venv
+.venv\Scripts\pip install -e .
+.venv\Scripts\aspen-mcp
 ```
 
 The server communicates over **stdio** (standard MCP transport) — compatible with any MCP client.
@@ -171,6 +223,44 @@ get_stream("S-1")
 | set_product_stage(block, stream, stage, phase?) | Set product draw stage |
 | add_side_duty(block, stage, duty) | Add side heater/cooler duty |
 | remove_side_duty(block, stage) | Remove side duty |
+| resize_column_stages(block, nstage, feed_stages?) | Change NSTAGE keeping feeds, bottoms draw and internals consistent |
+
+### Column Internals (trays / packing)
+Column Internals live in the block Input as `CA_xxx\{config}\{section}`. A configuration
+is created with `Subobjects\Column Internals.Elements.Add("INT-1")`; a section is a
+labelled row (`InsertRow` + `SetLabel` on `CA_STAGE1\INT-1`). Results are in
+`Output\CA_xxx\{config}\{section}` (e.g. `CA_DIAM2`, `CA_FLD_FAC2`, `CA_DPSEC2`).
+
+| Tool | Description |
+|------|-------------|
+| list_column_internals(block) | Configs, sections, geometry and results |
+| add_column_internals(block, config?) | Create INT-1 (or another config) and make it active |
+| add_internals_section(block, section, start, end, type?) | Add a TRAY/PACKING section over a stage range |
+| remove_internals_section(block, section) | Remove a section |
+| configure_tray_section(block, section, ...) | Tray type, passes, spacing, mode (INTER-SIZING/RATING), diameter, deck gauge, weir, holes, downcomer clearance, overall efficiency, foaming, pressure update |
+| configure_packed_section(block, section, packing_type, ...) | Packing type/vendor/material/size, packed height or HETP |
+| set_internals_param(block, section, param, value) | Any `CA_xxx` input, validated against Aspen's option list |
+| describe_internals_params(block, filter?) | Aspen's own description, unit and options for each `CA_xxx` |
+| get_column_hydraulics(block, per_stage?) | Diameter, % flood, downcomer backup, ΔP, height |
+| oconnell_efficiency(block, light_key, heavy_key) | Overall tray efficiency (O'Connell) from the converged column |
+| column_height_estimate(block, top_space_m?, ...) | Tangent-to-tangent height and L/D from the internals |
+
+Notes from use on Aspen Plus V15:
+- `.apw` must be opened with `InitFromFile2`; `InitFromArchive2` on an `.apw` leaves `Data\Blocks` empty.
+- `attach(path)` binds to a file already open in the GUI (Running Object Table). When DCOM
+  cannot start `aspenplus.exe -Automation` (low memory: the APED LocalDB fails with error 575),
+  `open_file` launches `AspenPlus.exe` and attaches instead.
+- Runs start with `Engine.Run2(True)` and are polled, so slow runs do not hit the COM timeout.
+- An incomplete property analysis (e.g. a Txy with `PVARVALUE=RANGE` but only a pressure list)
+  stops input translation for the whole flowsheet: check the `.his` file when a run returns no results.
+- Tray results use different keys from packing, and from sizing to rating: sizing gives
+  `CA_DIAM6`, `CA_DPSEC4`, `CA_TS_TOTHT`; rating gives `CA_FLD_FAC5` (max % flood),
+  `CA_DCBSPACE1` (max downcomer backup, % of spacing), `CA_DPSEC3`, `CA_TR_TOTHT`.
+  Aspen's section height and pressure drop count one tray per theoretical stage (they ignore
+  `CA_EFF`); `column_height_estimate` applies the efficiency itself.
+- Three-phase RadFrac leaves `B_K` and `LIQ_FLOW_MS` empty; the tools fall back to y/x and `HYD_LMF`.
+- Feeding the hydraulic pressure drop back (`update_pressure=True`) raises bottoms temperatures
+  and can push a reboiler above its steam level ("TEMPERATURES CROSS WITH UTILITY" in the `.his`).
 
 ### Utilities
 | Tool | Description |
@@ -224,9 +314,16 @@ get_stream("S-1")
 
 Detailed block parameter documentation for 70+ Aspen Plus block types is available under `docs/blocks/`.
 
+## Credits
+
+- Original server: [thirakorn-mokkawes-59/aspen-mcp](https://github.com/thirakorn-mokkawes-59/aspen-mcp)
+  (also published as [ddtlxc001/aspen-mcp](https://github.com/ddtlxc001/aspen-mcp)), MIT — the COM
+  bridge, the 85 base tools, the block docs and the convergence knowledge base come from there.
+- Column Internals tools, GUI attach, V15 open/run fixes: Eduardo Mariola, with Claude Code.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The upstream copyright notice is kept.
 
 
 ---

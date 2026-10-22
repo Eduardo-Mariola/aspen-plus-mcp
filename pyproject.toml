@@ -1,14 +1,16 @@
 [project]
 name = "aspen-plus-mcp"
-version = "1.0.0"
-description = "MCP server for Aspen Plus process simulation — talk to Aspen Plus in natural language"
+version = "1.1.0"
+description = "MCP server for Aspen Plus V15 — process simulation in natural language, with RadFrac Column Internals (trays, packing, hydraulics, column height)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
+    {name = "Eduardo Mariola"},
     {name = "Reasonix Contributors"},
 ]
-keywords = ["aspen-plus", "mcp", "process-simulation", "chemical-engineering", "com-automation"]
+keywords = ["aspen-plus", "mcp", "process-simulation", "chemical-engineering", "com-automation",
+            "distillation", "column-internals", "claude-code"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -29,9 +31,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ddtlxc001/aspen-mcp"
-Repository = "https://github.com/ddtlxc001/aspen-mcp"
-Documentation = "https://github.com/ddtlxc001/aspen-mcp#readme"
+Homepage = "https://github.com/Eduardo-Mariola/aspen-plus-mcp"
+Repository = "https://github.com/Eduardo-Mariola/aspen-plus-mcp"
+Documentation = "https://github.com/Eduardo-Mariola/aspen-plus-mcp#readme"
+Upstream = "https://github.com/thirakorn-mokkawes-59/aspen-mcp"
 
 [project.scripts]
 aspen-mcp = "aspen_mcp.server:main"
