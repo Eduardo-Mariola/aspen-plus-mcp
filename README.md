@@ -1,701 +1,265 @@
-# Aspen Plus V15 MCP — with Column Internals
+# Aspen Plus V15 MCP Server
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Windows](https://img.shields.io/badge/platform-Windows-lightgrey)](https://www.microsoft.com/windows)
+MCP (Model Context Protocol) server that lets Claude — in Claude Code, Claude Desktop or any MCP
+client — drive **Aspen Plus V15** through its COM interface: open and run simulations, read and
+write any node of the tree, edit the flowsheet, diagnose convergence and, what no other public Aspen
+MCP server does, **design RadFrac Column Internals** (tray and packed sections, hydraulics, tray
+efficiency and column height).
 
-**Talk to Aspen Plus in natural language.** An MCP (Model Context Protocol) server that bridges AI agents
-(Claude Code, Claude Desktop, any MCP client) with Aspen Plus V15 via COM automation — now including
-**RadFrac Column Internals**: tray and packed sections, hydraulics, tray efficiency and column height.
+By **Eduardo Mariola** — Chemical Engineering, UNESP (Brazil).
 
-Maintained by **Eduardo Mariola** (Chemical Engineering, UNESP). Built on top of
-[thirakorn-mokkawes-59/aspen-mcp](https://github.com/thirakorn-mokkawes-59/aspen-mcp) (MIT) — see
-[Credits](#credits).
+## Why this exists
 
-> **English** · **Português (abaixo)** · **中文 (upstream docs, further down)**
+I spent two semesters designing a benzyl alcohol plant (hydrolysis of benzyl acetate): patent
+search and route selection, the Aspen Plus flowsheet I built block by block — reactor, five
+distillation columns, decanter and recycles —, economic evaluation, P&IDs in AutoCAD Plant 3D, and
+now the 3D model, HAZOP and LOPA.
 
-## What this version adds
+When the time came to model the plant in 3D, the tray columns came out absurd: under 1 m in
+diameter and 19 to 27 m tall. Without Column Internals, the economic evaluator assumes 24-inch tray
+spacing and its own tray efficiency for every column. None of the public Aspen MCP servers could
+touch Column Internals, so I built that here, in Claude Code sessions on my own machine, on top of
+a year of project context.
 
-None of the public Aspen MCP servers could touch Column Internals, so tray columns came out of the
-economic evaluation with default 24-in spacing and absurd heights. This version adds:
+Result on my process: tray internals defined for four columns through MCP calls, the file re-opened
+from scratch and run with `PER_ERROR = 0`, product at 99.84 wt% benzyl alcohol, and column heights of
+2.8 to 14.5 m with realistic L/D.
 
-| Area | What changed |
-|---|---|
-| **Column Internals (new, 13 tools)** | Create `INT-1`, add tray/packed sections over stage ranges, set tray type, passes, spacing, diameter, deck gauge, weir height, hole size, downcomer clearance, overall efficiency; interactive sizing or rating; read flooding, downcomer backup, pressure drop; O'Connell efficiency from the converged column; tangent-to-tangent height and L/D |
-| **Open files the right way** | `.apw` with `InitFromFile2`, `.bkp` with `InitFromArchive2` (archive-loading an `.apw` leaves the tree empty) |
-| **Work in the user's window** | `attach()` binds to a simulation already open in the Aspen GUI through the Running Object Table |
-| **Low-memory machines** | if DCOM cannot start `aspenplus.exe -Automation` (APED LocalDB error 575), `open_file()` launches `AspenPlus.exe` and attaches |
-| **Long runs** | `Engine.Run2(True)` + polling, so a 100 s run never trips the per-call COM timeout |
-| **Fixes** | convergence report returned nothing (missing `return`); hard-coded path in `new_simulation` |
+> **Em português.** Passei dois semestres projetando uma planta de álcool benzílico (busca de
+> patentes, rota, fluxograma no Aspen montado bloco a bloco, avaliação econômica, P&IDs no Plant 3D
+> e agora o modelo 3D, HAZOP e LOPA). Na hora do 3D, as torres de pratos saíam com menos de 1 m de
+> diâmetro e 19 a 27 m de altura, porque sem internos de coluna o avaliador econômico usa
+> espaçamento de 24" para tudo. Nenhum servidor MCP público do Aspen mexia em internos, então
+> construí isso aqui, no Claude Code e na minha máquina, com o contexto de um ano de projeto.
 
-Validated on a five-column benzyl alcohol process (Aspen Plus V15): tray internals defined for four
-columns through MCP calls, file re-opened from scratch and run with `PER_ERROR = 0`.
+## Features
 
-### Column Internals in 6 calls
+- **Column Internals (new)**: create `INT-1`, add tray or packed sections over stage ranges; set
+  tray type, passes, spacing, diameter, deck gauge, weir height, hole size, downcomer clearance and
+  overall efficiency; interactive sizing or rating; read flooding, downcomer backup and pressure
+  drop; O'Connell efficiency from the converged column; tangent-to-tangent height and L/D
+- **Process simulation control**: open (`.apw` via `InitFromFile2`, `.bkp` via `InitFromArchive2`),
+  run, reinitialize, save, stop
+- **Work in your own window**: `attach` binds to a simulation already open in the Aspen GUI
+- **Robust on modest machines**: long runs are started asynchronously and polled; when DCOM cannot
+  start Aspen (low memory), the server launches `AspenPlus.exe` and attaches
+- **Data access**: read and write any node by path; streams, blocks, components, reactions, utilities
+- **Flowsheet editing**: add/remove blocks and streams, connect ports, RadFrac stages, feeds, products
+- **Diagnostics**: convergence report after every run, knowledge base, incomplete-input scan, tear streams
 
-```text
-attach("C:\\path\\plant.apw")
-add_column_internals("T-102")                                  # creates INT-1, makes it active
-add_internals_section("T-102", "CS-1", 2, 15, "TRAY")          # stages 2..N-1
-configure_tray_section("T-102", "CS-1", tray_type="SIEVE", tray_spacing_m=0.30,
-                       mode="RATING", diameter_m=0.45, deck_thickness="14 GAUGE",
-                       weir_height_mm=50, overall_efficiency=0.58)
-reinit_and_run()
-get_column_hydraulics("T-102")      # % flood, downcomer backup, ΔP per section
-column_height_estimate("T-102")     # real trays, tangent-to-tangent height, L/D
+## Requirements
+
+- Windows (Aspen Plus is driven through COM)
+- Aspen Plus V15 (GUI version 41.0)
+- Python 3.10 or higher
+- `pywin32` and `fastmcp` (installed with the package)
+
+## Installation
+
+1. Clone this repository:
+```bash
+git clone https://github.com/Eduardo-Mariola/aspen-plus-mcp.git
+cd aspen-plus-mcp
 ```
 
-### Register in Claude Code
+2. Create a virtual environment:
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+3. Install the package:
+```bash
+pip install -e .
+```
+
+## Configuration
+
+### Claude Code
 
 ```bash
 claude mcp add --scope user aspen-plus -- "C:\path\to\aspen-plus-mcp\.venv\Scripts\python.exe" -m aspen_mcp.server
 ```
 
-## Em português
+The tools show up as `mcp__aspen-plus__*` in the next session.
 
-Servidor MCP para controlar o **Aspen Plus V15** por linguagem natural (Claude Code, Claude Desktop ou
-qualquer cliente MCP). Esta versão acrescenta o que faltava nos servidores públicos: **internos de
-coluna da RadFrac** — seções de pratos e de recheio, espaçamento, diâmetro, espessura do prato,
-vertedor, furos, eficiência global, hidráulica (inundação, retenção no downcomer, perda de carga),
-eficiência de O'Connell e altura tangente-a-tangente. Também abre `.apw` corretamente, trabalha na
-janela do Aspen que já está aberta (ROT) e aguenta corridas longas em máquinas com pouca memória.
+### Claude Desktop
 
----
+Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 
-## Features
-
-- **85 MCP tools** for blocks, streams, components, reactions, columns, utilities, sensitivity
-- **No GUI interaction needed** — control Aspen Plus entirely through code
-- **Smart parameter categorization** — `find_incomplete_inputs()` knows what matters per block type and operating mode
-- **Convergence diagnostics** — `diagnose()` with built-in knowledge base
-- **Reaction kinetics** — POWERLAW, LHHW, EQUILIBRIUM, RStoic, RPLUG/RCSTR reaction sets
-- **Sensitivity analysis** — variable sweep with linked feed parameters
-- **Safe COM threading** — dedicated STA thread, auto-retry with reconnection
-
-## Quick Start
-
-### Requirements
-
-- **Windows** (COM automation is Windows-only)
-- **Aspen Plus v15** (GUI 41.0 / 40.0)
-- **Python 3.10+**
-
-### Installation
-
-```bash
-git clone https://github.com/Eduardo-Mariola/aspen-plus-mcp.git
-cd aspen-plus-mcp
-python -m venv .venv
-.venv\Scripts\pip install -e .
-.venv\Scripts\aspen-mcp
-```
-
-The server communicates over **stdio** (standard MCP transport) — compatible with any MCP client.
-
-### MCP Client Configuration
-
-**Reasonix** (reasonix.toml):
-```toml
-[[plugins]]
-name    = "aspen-mcp"
-command = "path\\to\\aspen-mcp\\venv\\Scripts\\python.exe"
-args    = ["-m", "aspen_mcp.server"]
-```
-
-**Claude Desktop / VS Code** (mcpServers):
 ```json
 {
   "mcpServers": {
-    "aspen-mcp": {
-      "command": "path\\to\\aspen-mcp\\venv\\Scripts\\python.exe",
+    "aspen-plus": {
+      "command": "C:\\path\\to\\aspen-plus-mcp\\.venv\\Scripts\\python.exe",
       "args": ["-m", "aspen_mcp.server"]
     }
   }
 }
 ```
 
-### Typical Workflow
+**Important notes:**
+- Use the full absolute path to the virtual environment's Python
+- Restart Claude Desktop completely after editing the file
+- If Aspen Plus is installed elsewhere, set `ASPEN_PLUS_EXE` to the path of `AspenPlus.exe`
+
+## Usage
+
+### Running the server
+
+```bash
+python -m aspen_mcp.server
+```
+
+### Available tools
+
+#### Simulation
+- `open_file` - Open `.apw`/`.apwz`/`.bkp` (attaches if the file is already open in the GUI)
+- `attach` - Work on a simulation already open in the Aspen Plus window
+- `run` / `reinit_and_run` - Run (asynchronously, polled) and return the convergence report
+- `save` - Save, or save as a new path
+- `status`, `probe`, `stop_simulation`, `reinit`, `close_file`, `visible`, `new_simulation`
+
+#### Column Internals (new)
+- `add_column_internals` - Create a configuration (`INT-1`) on a RadFrac and make it active
+- `add_internals_section` / `remove_internals_section` - Tray or packed section over a stage range
+- `configure_tray_section` - Tray type, passes, spacing, mode (sizing/rating), diameter, deck gauge,
+  weir height, hole size, downcomer clearance, overall efficiency, foaming factor
+- `configure_packed_section` - Packing type, vendor, material, size, packed height or HETP
+- `set_internals_param` - Any `CA_xxx` input, validated against Aspen's option list
+- `describe_internals_params` - Aspen's own description, unit and options of each `CA_xxx` input
+- `list_column_internals` - Sections, geometry and results
+- `get_column_hydraulics` - Flooding, downcomer backup, pressure drop, per section or per stage
+- `oconnell_efficiency` - Overall tray efficiency from the converged column
+- `column_height_estimate` - Real trays, tangent-to-tangent height and L/D
+- `resize_column_stages` - Change `NSTAGE` keeping feeds, bottoms draw and sections consistent
+
+#### Columns
+- `set_column_stages`, `set_feed_stage`, `set_product_stage`, `set_column_pressure`
+- `set_condenser_type`, `set_reboiler_type`, `add_side_duty`, `remove_side_duty`
+
+#### Flowsheet, streams and blocks
+- `list_all_blocks`, `get_block`, `add_block`, `remove_block`, `set_param`, `block_status`
+- `list_all_streams`, `get_stream`, `add_stream`, `remove_stream`, `set_stream_param`,
+  `set_stream_composition`, `set_stream_composition_batch`
+- `connect`, `connect_port`, `disconnect`, `list_block_ports`, `list_all_ports`, `flowsheet_topology`,
+  `configure_fsplit`
+
+#### Components, properties, reactions, utilities
+- `list_components`, `add_component`, `remove_component`, `get_property_method`, `set_property_method`
+- `add_reaction_set`, `add_reaction`, `remove_reaction`, `remove_reaction_set`, `list_reaction_sets`,
+  `setup_block_reaction`
+- `add_utility`, `batch_add_utilities`, `list_utilities`, `get_utility`, `remove_utility`
+
+#### Paths, analysis and diagnostics
+- `get_value`, `set_value`, `insert_row`, `set_label`, `explore`
+- `sensitivity`, `sensitivity_advanced`, `diagnose`, `search_convergence_knowledge`,
+  `find_incomplete_inputs`, `validate_block`, `simulation_warnings`, `list_tear_streams`,
+  `set_tear_estimate`, `export_report_file`, `help`
+
+### Example node paths
 
 ```
-# 1. Open or create
-open_file("my_simulation.apw")      # or: new_simulation()
+# Stream temperature and component mass fraction
+\Data\Streams\S1\Output\TEMP_OUT\MIXED
+\Data\Streams\S1\Output\MASSFRAC\MIXED\WATER
 
-# 2. Add components
-add_component("WATER")
-add_component("ETHANOL")
+# RadFrac input and stage profile
+\Data\Blocks\T-102\Input\NSTAGE
+\Data\Blocks\T-102\Input\FEED_STAGE\27
+\Data\Blocks\T-102\Output\B_TEMP\5
 
-# 3. Set property method
-set_property_method("NRTL")
+# Column Internals input: <param>\<config>\<section>
+\Data\Blocks\T-102\Input\CA_TRAY_SPC\INT-1\CS-1
+\Data\Blocks\T-102\Input\CA_DIAM\INT-1\CS-1
+\Data\Blocks\T-102\Input\CA_EFF\INT-1\CS-1
 
-# 4. Build topology
-add_block("MIXER", "M-1")
-add_block("HEATER", "H-1")
-connect("M-1", "H-1", "S-1")
+# Column Internals results (tray, rating mode)
+\Data\Blocks\T-102\Output\CA_FLD_FAC5\INT-1\CS-1       # max % flood
+\Data\Blocks\T-102\Output\CA_DCBSPACE1\INT-1\CS-1      # max downcomer backup, % of spacing
+\Data\Blocks\T-102\Output\CA_DPSEC3\INT-1\CS-1         # section pressure drop
 
-# 5. Set parameters
-set_param("H-1", "TEMP", 150)             # block param
-set_stream_param("S-1", "TEMP", 100)      # stream param
-set_stream_param("S-1", "PRES", 5)
+# Run status
+\Data\Results Summary\Run-Status\Output\PER_ERROR
+```
 
-# 6. Run & get results
+## Usage examples
+
+### Attach to the open simulation and run
+```python
+attach(file_path="C:/projects/plant.apw")
 reinit_and_run()
-get_block("H-1")
-get_stream("S-1")
+get_value(path="\\Data\\Streams\\PRODUCT\\Output\\MASSFRAC\\MIXED\\BZOH")
 ```
 
----
+### Size a tray column, then rate it with a standard diameter
+```python
+add_column_internals(block_name="T-103")
+add_internals_section(block_name="T-103", section="CS-1", stage_start=2, stage_end=29)
+configure_tray_section(block_name="T-103", section="CS-1", tray_type="SIEVE",
+                       tray_spacing_m=0.30, mode="INTER-SIZING",
+                       deck_thickness="14 GAUGE", weir_height_mm=50)
+reinit_and_run()
+get_column_hydraulics(block_name="T-103")                    # sized diameter (CA_DIAM6)
+oconnell_efficiency(block_name="T-103", light_key="BZOH", heavy_key="BZOAC")
 
-## Tool Reference
+configure_tray_section(block_name="T-103", section="CS-1", mode="RATING",
+                       diameter_m=0.60, overall_efficiency=0.72, tray_spacing_m=0.30)
+reinit_and_run()
+get_column_hydraulics(block_name="T-103", per_stage=True)    # % flood and downcomer backup per tray
+column_height_estimate(block_name="T-103")                   # real trays, T-T height, L/D
+save(file_path="C:/projects/plant - internals.apw")
+```
 
-### Simulation Lifecycle
-| Tool | Description |
-|------|-------------|
-| open_file(path) | Open .apw file |
-| new_simulation() | Create blank sim from clean template |
-| close_file() | Close current file |
-| run() | Run simulation (sync) |
-| run_async() | Run asynchronously |
-| stop_simulation() | Stop running simulation |
-| reinit() | Clear results (call before re-running) |
-| reinit_and_run() | Reinit + Run in one step (recommended) |
-| save(path?) | Save / SaveAs |
-| status() | Connection & engine status |
-| probe() | COM health check (app/root/tree) |
-| visible(show) | Show/hide Aspen GUI window |
-| batch_refresh(off) | Toggle GUI refresh (faster bulk ops) |
-| run_script(path) | Execute a Python script inside Aspen |
+### Packed section
+```python
+add_internals_section(block_name="T-101", section="CS-1", stage_start=2, stage_end=14,
+                      internal_type="PACKING")
+configure_packed_section(block_name="T-101", section="CS-1", packing_type="MELLAPAK",
+                         vendor="SULZER", material="STANDARD", size="250Y", hetp_m=0.50)
+```
 
-### Flowsheet Topology
-| Tool | Description |
-|------|-------------|
-| add_block(name, type) | Add a block (HEATER, RPLUG, FLASH2, MIXER, etc.) |
-| remove_block(name) | Remove a block |
-| add_stream(name) | Add a stream |
-| remove_stream(name) | Remove a stream |
-| connect(source, dest, stream?) | Connect blocks via auto-created stream |
-| connect_port(block, port, stream) | Connect to a specific port |
-| disconnect(stream_name) | Disconnect & remove stream |
-| list_all_blocks() | List all blocks |
-| list_all_streams() | List all streams |
-| list_all_ports() | All ports & connections at a glance |
-| list_block_ports(block) | List a block's ports & connections |
-| flowsheet_topology() | Full topology: source --[stream]--> dest |
+## Lessons from Aspen Plus V15
 
-### Parameters & Streams
-| Tool | Description |
-|------|-------------|
-| set_param(block, param, value) | Set a block parameter |
-| set_stream_param(stream_name, param, value, basis?) | Set a stream parameter (TEMP, PRES, TOTAL), optional basis |
-| set_stream_composition(stream_name, component, flow) | Set a component's molar flow |
-| set_stream_composition_batch(stream_name, components, basis?, total_flow?) | Batch-set composition with BASIS control |
-| get_block(name) | Read block specs & results |
-| get_stream(name) | Read stream output properties |
-| block_status(name) | Block convergence status (BLKSTAT/BLKMSG) |
-| get_stream_composition_info(name) | Stream composition metadata |
+- An `.apw` must be opened with `InitFromFile2`; archive-loading it leaves `\Data\Blocks` empty.
+- When DCOM cannot start `aspenplus.exe -Automation` (the APED LocalDB fails with error 575 on a
+  machine short of memory), opening `AspenPlus.exe` directly and attaching through the Running
+  Object Table works.
+- A run that returns no results at all: read the `.his`. An incomplete property analysis (a Txy with
+  `RANGE` selected but only a pressure list filled) stops input translation for the whole flowsheet.
+- Tray results use different keys from packing, and from sizing to rating. Aspen's section height
+  and pressure drop count one tray per theoretical stage and ignore `CA_EFF`, so
+  `column_height_estimate` applies the efficiency itself.
+- Three-phase RadFrac blocks leave `B_K` and `LIQ_FLOW_MS` empty; the tools fall back to y/x and
+  `HYD_LMF`.
+- Feeding the hydraulic pressure drop back into the column raises bottoms temperatures and can push
+  a reboiler above its steam level (`TEMPERATURES CROSS WITH UTILITY` in the `.his`).
 
-### Components & Properties
-| Tool | Description |
-|------|-------------|
-| add_component(id) | Add a component (WATER, ETHANOL, etc.) |
-| remove_component(id) | Remove a component |
-| list_components() | List all components |
-| get_property_method() | Get current global property method |
-| set_property_method(method) | Set property method (NRTL, PENG-ROB, UNIQUAC, IDEAL) |
+## Development
 
-### Reactions
-| Tool | Description |
-|------|-------------|
-| add_reaction_set(name, type) | Create reaction set (POWERLAW/LHHW/EQUILIBRIUM) |
-| remove_reaction_set(name) | Remove a reaction set |
-| add_reaction(set, no, reactants, products, phase?, exponents?) | Add a reaction with stoichiometry |
-| remove_reaction(set, no) | Remove a single reaction |
-| list_reaction_sets() | List all reaction sets |
-| setup_block_reaction(block, reactants?, products?, ...) | Set RStoic block stoichiometry |
+```bash
+pip install -e .
+python -c "import aspen_mcp.server"        # import check
+```
 
-### Columns (RadFrac)
-| Tool | Description |
-|------|-------------|
-| set_column_stages(block, nstage) | Set number of stages |
-| set_column_pressure(block, top_pres, dp_stage?) | Set pressure profile |
-| set_condenser_type(block, type) | Set condenser (NONE/TOTAL/PARTIAL-V/...) |
-| set_reboiler_type(block, type) | Set reboiler (NONE/KETTLE/THERMOSIPHON/...) |
-| set_feed_stage(block, stream, stage) | Set feed stage |
-| set_product_stage(block, stream, stage, phase?) | Set product draw stage |
-| add_side_duty(block, stage, duty) | Add side heater/cooler duty |
-| remove_side_duty(block, stage) | Remove side duty |
-| resize_column_stages(block, nstage, feed_stages?) | Change NSTAGE keeping feeds, bottoms draw and internals consistent |
+Project layout:
 
-### Column Internals (trays / packing)
-Column Internals live in the block Input as `CA_xxx\{config}\{section}`. A configuration
-is created with `Subobjects\Column Internals.Elements.Add("INT-1")`; a section is a
-labelled row (`InsertRow` + `SetLabel` on `CA_STAGE1\INT-1`). Results are in
-`Output\CA_xxx\{config}\{section}` (e.g. `CA_DIAM2`, `CA_FLD_FAC2`, `CA_DPSEC2`).
-
-| Tool | Description |
-|------|-------------|
-| list_column_internals(block) | Configs, sections, geometry and results |
-| add_column_internals(block, config?) | Create INT-1 (or another config) and make it active |
-| add_internals_section(block, section, start, end, type?) | Add a TRAY/PACKING section over a stage range |
-| remove_internals_section(block, section) | Remove a section |
-| configure_tray_section(block, section, ...) | Tray type, passes, spacing, mode (INTER-SIZING/RATING), diameter, deck gauge, weir, holes, downcomer clearance, overall efficiency, foaming, pressure update |
-| configure_packed_section(block, section, packing_type, ...) | Packing type/vendor/material/size, packed height or HETP |
-| set_internals_param(block, section, param, value) | Any `CA_xxx` input, validated against Aspen's option list |
-| describe_internals_params(block, filter?) | Aspen's own description, unit and options for each `CA_xxx` |
-| get_column_hydraulics(block, per_stage?) | Diameter, % flood, downcomer backup, ΔP, height |
-| oconnell_efficiency(block, light_key, heavy_key) | Overall tray efficiency (O'Connell) from the converged column |
-| column_height_estimate(block, top_space_m?, ...) | Tangent-to-tangent height and L/D from the internals |
-
-Notes from use on Aspen Plus V15:
-- `.apw` must be opened with `InitFromFile2`; `InitFromArchive2` on an `.apw` leaves `Data\Blocks` empty.
-- `attach(path)` binds to a file already open in the GUI (Running Object Table). When DCOM
-  cannot start `aspenplus.exe -Automation` (low memory: the APED LocalDB fails with error 575),
-  `open_file` launches `AspenPlus.exe` and attaches instead.
-- Runs start with `Engine.Run2(True)` and are polled, so slow runs do not hit the COM timeout.
-- An incomplete property analysis (e.g. a Txy with `PVARVALUE=RANGE` but only a pressure list)
-  stops input translation for the whole flowsheet: check the `.his` file when a run returns no results.
-- Tray results use different keys from packing, and from sizing to rating: sizing gives
-  `CA_DIAM6`, `CA_DPSEC4`, `CA_TS_TOTHT`; rating gives `CA_FLD_FAC5` (max % flood),
-  `CA_DCBSPACE1` (max downcomer backup, % of spacing), `CA_DPSEC3`, `CA_TR_TOTHT`.
-  Aspen's section height and pressure drop count one tray per theoretical stage (they ignore
-  `CA_EFF`); `column_height_estimate` applies the efficiency itself.
-- Three-phase RadFrac leaves `B_K` and `LIQ_FLOW_MS` empty; the tools fall back to y/x and `HYD_LMF`.
-- Feeding the hydraulic pressure drop back (`update_pressure=True`) raises bottoms temperatures
-  and can push a reboiler above its steam level ("TEMPERATURES CROSS WITH UTILITY" in the `.his`).
-
-### Utilities
-| Tool | Description |
-|------|-------------|
-| add_utility(name, type, block?, params?) | Add WATER/STEAM/ELECTRICITY utility |
-| batch_add_utilities([]) | Add multiple utilities atomically |
-| get_utility(name) | Read utility parameters |
-| list_utilities() | List all utilities |
-| remove_utility(name) | Remove a utility |
-
-### Recycle / Tear Streams
-| Tool | Description |
-|------|-------------|
-| list_tear_streams() | List all tear streams (recycle loops) |
-| set_tear_estimate(stream, temp?, pres?, total_flow?) | Set tear stream initial estimate |
-| configure_fsplit(block, outlet, frac) | Configure FSPLIT outlet split fraction |
-
-### Diagnostics & Analysis
-| Tool | Description |
-|------|-------------|
-| find_incomplete_inputs() | Scan unset inputs (per-block smart categorization) |
-| fill_trivial_params() | Fill infrastructure params with defaults |
-| validate_block(name) | Check block input completeness |
-| diagnose(keywords) | Convergence diagnosis + knowledge base search |
-| search_convergence_knowledge(keywords) | Verbose knowledge base search |
-| simulation_warnings() | Scan for common config issues |
-| sensitivity(block, variable, values, unit?) | Manual sensitivity sweep |
-| sensitivity_advanced(block, variable, values, linked_params?, ...) | Advanced sweep with linked feed params |
-| deep_probe(block_name?) | Deep-probe block input nodes for validation info |
-| export_report_file(path) | Export .rep report |
-| generate_input_summary(path, mode?) | Export .bkp input summary |
-| readback(path, mode?) | Read back .bkp file into simulation |
-
-### Low-level Path Access
-| Tool | Description |
-|------|-------------|
-| explore(path) | Explore Aspen object tree at backslash path |
-| get_value(path) | Read value by backslash path |
-| set_value(path, value, unit?) | Write value by backslash path |
-| insert_row(path, dimension?) | Insert row in a table node |
-| set_label(path, index, label, dimension?) | Set row/column label in a 2D table |
-
-### Discovery & Help
-| Tool | Description |
-|------|-------------|
-| help(topic?) | Get usage guide for any workflow topic |
-
----
-
-## Documentation
-
-Detailed block parameter documentation for 70+ Aspen Plus block types is available under `docs/blocks/`.
+```
+src/aspen_mcp/
+  server.py            MCP tool registration (FastMCP)
+  com_bridge.py        COM apartment thread, open/attach, async run
+  tools/internals.py   Column Internals tools
+  tools/*.py           simulation, streams, blocks, columns, analysis, reactions, utilities
+  knowledge/           convergence knowledge base
+docs/blocks/           parameter notes per Aspen block type
+```
 
 ## Credits
 
-- Original server: [thirakorn-mokkawes-59/aspen-mcp](https://github.com/thirakorn-mokkawes-59/aspen-mcp)
-  (also published as [ddtlxc001/aspen-mcp](https://github.com/ddtlxc001/aspen-mcp)), MIT — the COM
-  bridge, the 85 base tools, the block docs and the convergence knowledge base come from there.
-- Column Internals tools, GUI attach, V15 open/run fixes: Eduardo Mariola, with Claude Code.
+The COM bridge and the general-purpose tools are adapted from the MIT-licensed
+[aspen-mcp](https://github.com/thirakorn-mokkawes-59/aspen-mcp); its copyright notice is kept in
+[LICENSE](LICENSE).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The upstream copyright notice is kept.
-
-
----
-
-# Aspen Plus MCP
-
-通过自然语言操控 Aspen Plus 进行化工流程模拟——参数调优、批量运行、读取结果，全部由 AI 代理完成。
-
-## 工作模式
-
-```
-你在 GUI 里搭好流程拓扑 → MCP 接管参数调优和运行分析
-```
-
-**MCP 不负责画流程图。** 你可以在 Aspen Plus GUI 中手动放置模块和物流，也可以用 `connect`/`connect_port` 工具通过代码建立连接。搭建完成后，MCP 用来：
-
-- ✅ 批量改参数、跑灵敏度分析
-- ✅ 运行模拟、检查收敛状态
-- ✅ 读取物流和模块结果数据
-- ✅ 导出报告
-
----
-
-## 安装
-
-### 环境要求
-
-- Windows（COM 自动化依赖）
-- Aspen Plus v15 已安装（GUI 41.0 / 40.0）
-- Python 3.10+
-
-### 步骤
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/ddtlxc001/aspen-mcp.git
-cd aspen-mcp
-
-# 2. 创建虚拟环境
-python -m venv venv
-
-# 3. 激活虚拟环境并安装依赖
-venv\Scripts\pip install -e .
-
-# 4. 启动（验证安装）
-venv\Scripts\aspen-mcp
-```
-
-启动后 MCP 服务器通过 stdio 通信，适用于任何支持 MCP 协议的客户端（Reasonix、Claude Desktop、VS Code 等）。
-
-### 在 Reasonix 中使用
-
-在 `reasonix.toml` 中添加：
-
-```toml
-[[plugins]]
-name    = "aspen-mcp"
-command = "path\\to\\aspen-mcp\\venv\\Scripts\\python.exe"
-args    = ["-m", "aspen_mcp.server"]
-```
-
-### 在 Claude Desktop / VS Code 中使用
-
-```json
-{
-  "mcpServers": {
-    "aspen-mcp": {
-      "command": "path\\to\\aspen-mcp\\venv\\Scripts\\python.exe",
-      "args": ["-m", "aspen_mcp.server"]
-    }
-  }
-}
-```
-
----
-
-## 常见工作流
-
-### 1. 打开文件并运行
-
-```
-open_file("甲醇.apw")
-run()
-status()
-```
-
-### 2. 改参数后重新运行
-
-```
-set_param("HEATER", "TEMP", 150)
-set_param("HEATER", "PRES", 5)
-run()
-get_stream("C-OUT")
-```
-
-### 3. 从零搭建流程
-
-```
-# 添加模块
-add_block("MIXER", "MIXER")
-add_block("REACTOR", "RPLUG")
-add_block("SEP", "FLASH2")
-
-# 连接
-connect("MIXER", "REACTOR", "FEED")
-connect("REACTOR", "SEP", "R-OUT")
-
-# 设参数
-set_param("MIXER", "TEMP", 100)
-set_stream_param("FEED", "TEMP", 150)
-set_stream_param("FEED", "PRES", 5)
-set_stream_param("FEED", "TOTAL", 100)
-
-# 运行
-reinit_and_run()
-get_stream("R-OUT")
-```
-
-### 4. 添加组分并切换物性方法
-
-```
-add_component("METHANE")
-add_component("ETHANOL")
-list_components()
-set_property_method("NRTL")
-```
-
----
-
-## 工具总览
-
-### 模拟生命周期
-
-| 工具 | 说明 |
-|---|---|
-| open_file(path) | 打开 .apw 文件 |
-| new_simulation() | 创建空白新模拟（复制纯净模板到临时文件） |
-| close_file() | 关闭当前文件 |
-| run() | 运行模拟（同步） |
-| run_async() | 异步运行 |
-| stop_simulation() | 停止当前运行 |
-| save(path?) | 保存或另存文件 |
-| reinit() | 重置结果（重新运行前调用） |
-| reinit_and_run() | Reinit + Run 一步完成（推荐） |
-| status() | 查看连接和引擎状态 |
-| probe() | 诊断 COM 状态（app/root/tree 三级检查） |
-| visible(show) | 显示/隐藏 Aspen 窗口 |
-| batch_refresh(off) | 开关 GUI 刷新（批量操作加速） |
-| run_script(path) | 在 Aspen 内部执行 Python 脚本 |
-
-### 流程拓扑
-
-| 工具 | 说明 |
-|---|---|
-| add_block(name, type) | 添加模块（HEATER, RPLUG, FLASH2, MIXER 等） |
-| remove_block(name) | 删除模块 |
-| add_stream(name) | 添加物流 |
-| remove_stream(name) | 删除物流 |
-| connect(source, dest, stream?) | 连接源块到目标块（自动创建流） |
-| connect_port(block, port, stream) | 连接到指定端口 |
-| disconnect(stream_name) | 断开流并从流程中移除 |
-| list_all_blocks() | 列出所有模块 |
-| list_all_streams() | 列出所有物流 |
-| list_all_ports() | 查看所有模块端口和连接 |
-| list_block_ports(block) | 查看块的端口和连接情况 |
-| flowsheet_topology() | 显示完整流程拓扑 |
-
-### 参数与结果
-
-| 工具 | 说明 |
-|---|---|
-| set_param(block, param, value) | 设置模块参数 |
-| set_stream_param(stream_name, param, value, basis?) | 设置物流参数（TEMP, PRES, TOTAL），可选 basis |
-| set_stream_composition(stream_name, component, flow) | 设置物流中某组分的摩尔流量 |
-| set_stream_composition_batch(stream_name, components, basis?, total_flow?) | 批量设置组分（支持 BASIS 控制） |
-| get_block(name) | 读取模块规格和结果 |
-| get_stream(name) | 读取物流属性（温度、压力、流量等） |
-| get_stream_composition_info(name) | 读取物流组成信息 |
-| block_status(name) | 读取模块收敛状态（BLKSTAT/BLKMSG） |
-
-### 组分与物性
-
-| 工具 | 说明 |
-|---|---|
-| list_components() | 列出所有组分 |
-| add_component(id) | 添加组分（如 WATER, ETHANOL） |
-| remove_component(id) | 删除组分 |
-| get_property_method() | 读取当前全局物性方法 |
-| set_property_method(method) | 设置物性方法（NRTL, PENG-ROB, UNIQUAC, IDEAL） |
-
-### 反应与动力学
-
-| 工具 | 说明 |
-|---|---|
-| add_reaction_set(name, type) | 创建反应集（POWERLAW/LHHW/EQUILIBRIUM） |
-| remove_reaction_set(name) | 删除反应集 |
-| add_reaction(set, no, reactants, products, phase?, exponents?) | 添加反应及计量系数 |
-| remove_reaction(set, no) | 删除单个反应 |
-| list_reaction_sets() | 列出所有反应集 |
-| setup_block_reaction(block, reactants?, products?, ...) | 设置 RStoic 块计量反应 |
-
-### 塔器（RadFrac）
-
-| 工具 | 说明 |
-|---|---|
-| set_column_stages(block, nstage) | 设置理论板数 |
-| set_column_pressure(block, top_pres, dp_stage?) | 设置压力分布 |
-| set_condenser_type(block, type) | 设置冷凝器类型 |
-| set_reboiler_type(block, type) | 设置再沸器类型 |
-| set_feed_stage(block, stream, stage) | 设置进料位置 |
-| set_product_stage(block, stream, stage, phase?) | 设置产品采出位置 |
-| add_side_duty(block, stage, duty) | 设置侧线换热 |
-| remove_side_duty(block, stage) | 删除侧线换热 |
-
-### 公用工程
-
-| 工具 | 说明 |
-|---|---|
-| add_utility(name, type, block?, params?) | 添加公用工程（WATER/STEAM/ELECTRICITY） |
-| batch_add_utilities([]) | 批量添加公用工程（原子操作） |
-| get_utility(name) | 读取公用工程参数 |
-| list_utilities() | 列出所有公用工程 |
-| remove_utility(name) | 删除公用工程 |
-
-### 回流撕裂流股
-
-| 工具 | 说明 |
-|---|---|
-| list_tear_streams() | 列出所有撕裂流股 |
-| set_tear_estimate(stream, temp?, pres?, total_flow?) | 设置撕裂流股初值 |
-| configure_fsplit(block, outlet, frac) | 配置 FSPLIT 出口分配比例 |
-
-### 分析诊断
-
-| 工具 | 说明 |
-|---|---|
-| find_incomplete_inputs() | 扫描未填写的输入节点 |
-| fill_trivial_params() | 填充基础设施/UI 参数 |
-| validate_block(name) | 验证模块输入完整性 |
-| diagnose(keywords) | 收敛诊断 + 知识库搜索 |
-| search_convergence_knowledge(keywords) | 详细收敛知识搜索 |
-| simulation_warnings() | 扫描常见配置问题 |
-| sensitivity(block, variable, values, unit?) | 手动灵敏度分析 |
-| sensitivity_advanced(block, variable, values, linked_params?, ...) | 高级灵敏度分析（支持关联进料参数） |
-| deep_probe(block_name?) | 深度探测块输入节点验证信息 |
-| export_report_file(path) | 导出 .rep 报告 |
-| generate_input_summary(path, mode?) | 导出 .bkp 输入摘要 |
-| readback(path, mode?) | 回读 .bkp 文件 |
-
-### 通用路径访问
-
-| 工具 | 说明 |
-|---|---|
-| explore(path) | 探索 Aspen 对象树 |
-| get_value(path) | 按反斜杠路径读值 |
-| set_value(path, value, unit?) | 按反斜杠路径写值 |
-| insert_row(path, dimension?) | 在表节点中插入行 |
-| set_label(path, index, label, dimension?) | 设置二维表的行/列标签 |
-
-### 帮助入口
-
-| 工具 | 说明 |
-|---|---|
-| help(topic?) | 获取任意工作流主题的详细用法指南 |
-
----
-
-## 操作要点
-
-### 删除块和物流的顺序 ⚠️
-
-**先删块，再清物流。** 绝不能反过来。
-
-✅ 正确：
-```
-remove_block B1          # 块先删，连接自动断裂
-disconnect CL2           # 清理残余孤儿物流
-disconnect H2O
-```
-
-❌ 错误（会导致 COM 服务器异常）：
-```
-disconnect CL2           # 块还在但进料少了一条
-disconnect H2O           # 块完全孤零零
-remove_block B1          # COM 服务器异常
-```
-
-### COM 错误分级
-
-| 错误现象 | 含义 | 应对 |
-|---|---|---|
-| 尚未调用 CoInitialize。 | 子线程未初始化 COM | 修复代码即可 |
-| 发生意外。 | 参数/操作型错误 | 可重试 |
-| 服务器出现异常情况。 | COM 状态已脏 | close_file → open_file |
-| 远程过程调用失败。 | Aspen Plus 未运行 | 检查 Aspen Plus |
-| 对象没有连接到服务器 | COM 代理已过期 | 重启 MCP 插件 |
-
-**close_file() → open_file() 可解决绝大多数 COM 稳定性问题。**
-
-### 流股参数设置（MIXED 子节点）⚠️
-
-**`set_param` 只能设模块参数。** 物流参数（TEMP、PRES、TOTAL 等）必须用 **`set_stream_param`**。
-
-为什么？Aspen COM 的流股参数节点都有一个 `MIXED` 子节点：
-
-```
-Data\Streams\H2O\Input\TEMP       ← 直接 SetValue 会报 AE_UNDERSPEC
-Data\Streams\H2O\Input\TEMP\MIXED  ← 必须在这里写入值
-```
-
-✅ 正确用法：
-```
-set_stream_param("H2O", "TEMP", 140)
-set_stream_param("H2O", "PRES", 1)
-set_stream_param("H2O", "TOTAL", 200)
-```
-
-### 运行策略：Reinit + Run2
-
-修改参数或拓扑后，正确的流程是：
-
-```
-reinit()           # 清空旧计算结果和引擎缓存
-run()              # 执行计算
-```
-
-或一步到位：
-```
-reinit_and_run()   # Reinit() + Run2() 组合
-```
-
-**Reinit() 会强制 Aspen 引擎重建计算顺序和撕裂流股。**
-
-### 启动策略
-
-`new_simulation()` 不使用 `InitNew()`（COM 引用不稳定），而是：
-1. `close_file()`
-2. 复制纯净空白模板到 `%TEMP%`（带 PID 后缀）
-3. `open_file()` 打开副本
-
-**模板初始状态：** METCBAR 单元制、0 组分、PENG-ROB 物性、空拓扑。
-
-### HEATER 的温度设置
-
-HEATER 默认 `HEATOPT=CONST-DUTY`。要用温度设参需先改为 `CONST-TEMP`：
-```
-set_value(r"\Data\Blocks\PREHEAT\Input\HEATOPT", "CONST-TEMP")
-```
-
-### 流连接
-
-物流连接不走 `Connections`（只读），而走 **`Block → Ports → {port名} → Elements.Add(流名)`**。
-- 标准端口名：`F(IN)` 输入、`P(OUT)` 输出、`V(OUT)` 汽相、`L(OUT)` 液相
-- 不确定端口名时用 `list_block_ports("模块名")` 查看
-
-### 保存文件
-
-- `save()` — 原地保存
-- `save("路径.apw")` — 另存为新文件
-
-### 批量操作加速
-
-大批量改参数前调 `batch_refresh(True)` 关闭 GUI 刷新，改完 `batch_refresh(False)` 恢复。
-
-### 模块参数文档
-
-`docs/blocks/` 目录下有 70 种 Aspen Plus 模块的详细参数文档。
-
----
-
-## Requirements
-
-- Windows（COM 自动化依赖）
-- Aspen Plus v15 已安装（GUI 41.0 / 40.0）
-- Python 3.10+
+MIT

@@ -7,7 +7,6 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Eduardo Mariola"},
-    {name = "Reasonix Contributors"},
 ]
 keywords = ["aspen-plus", "mcp", "process-simulation", "chemical-engineering", "com-automation",
             "distillation", "column-internals", "claude-code"]
