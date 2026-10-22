@@ -13,12 +13,22 @@ Key behaviours
   - Thread-safe: all methods submit to the same apartment thread.
   - SuppressDialogs set on connect to prevent modal dialogs from hanging.
   - Timeout + auto-retry with back-off; reconnects on connection loss.
+  - .apw/.apwz open with InitFromFile2, .bkp with InitFromArchive2
+    (InitFromArchive2 on an .apw leaves Data\\Blocks empty).
+  - attach(): bind to a document already open in the Aspen GUI through the
+    Running Object Table; open_file() falls back to launching AspenPlus.exe
+    and attaching when DCOM cannot start "aspenplus.exe -Automation"
+    (seen on low-memory machines: LocalDB of the APED fails with error 575).
+  - Runs are started asynchronously and polled, so a 100 s simulation does
+    not trip the per-call COM timeout.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import queue
+import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,6 +59,30 @@ _CONNECTION_LOST_CODES = {
     0x800706BF,   # RPC_S_CALL_FAILED_DNE
     0x80004005,   # E_FAIL
 }
+
+
+_ASPEN_EXE = os.environ.get(
+    "ASPEN_PLUS_EXE", r"C:\Program Files\AspenTech\Aspen Plus V15.0\GUI\Xeq\AspenPlus.exe")
+_ATTACH_TIMEOUT_SECONDS = 420
+_RUN_MAX_SECONDS = 3600
+
+
+def _rot_documents() -> list[str]:
+    """Display names of Aspen documents registered in the Running Object Table."""
+    names = []
+    try:
+        rot = pythoncom.GetRunningObjectTable()
+        ctx = pythoncom.CreateBindCtx(0)
+        for mk in rot:
+            try:
+                n = mk.GetDisplayName(ctx, None)
+            except Exception:
+                continue
+            if n.lower().endswith((".apw", ".apwz", ".bkp")):
+                names.append(n)
+    except Exception:
+        pass
+    return names
 
 
 def _is_connection_error(exc):
@@ -363,12 +397,78 @@ class AspenConnection:
             return "OK"
         return self.call(impl)
 
+    def attach(self, path=None) -> str:
+        """Bind to a document already open in the Aspen Plus GUI (via the ROT).
+
+        With no path, takes the first Aspen document found.
+        """
+        def impl():
+            names = _rot_documents()
+            if path:
+                want = os.path.abspath(path).lower()
+                target = next((n for n in names if n.lower() == want), None)
+            else:
+                target = names[0] if names else None
+            if target is None:
+                raise RuntimeError("no matching Aspen document open in the GUI; open it in "
+                                   "Aspen Plus first (found: %s)" % (names or "none"))
+            doc = win32com.client.GetObject(target)
+            try:
+                doc.SuppressDialogs = True
+            except Exception:
+                pass
+            self._app = doc
+            self._attached = True
+            return target
+        self._log_trace("attach", {"path": path}, "submitted")
+        return _COM.submit(impl, 60)
+
+    def _launch_and_attach(self, path) -> str:
+        """Start AspenPlus.exe with *path* (no DCOM) and attach to it."""
+        proc = subprocess.Popen([_ASPEN_EXE, path])
+        t0 = time.time()
+        want = path.lower()
+        while time.time() - t0 < _ATTACH_TIMEOUT_SECONDS:
+            if proc.poll() is not None:
+                raise RuntimeError("AspenPlus.exe exited with code %s" % proc.returncode)
+            if any(n.lower() == want for n in _rot_documents()):
+                time.sleep(2)
+                target = self.attach(path)
+                self._attached = False  # we started this window; close_file may close it
+                return target
+            time.sleep(2)
+        raise TimeoutError("Aspen Plus did not register %s within %ds" % (path, _ATTACH_TIMEOUT_SECONDS))
+
     def open_file(self, path):
+        """Open .apw/.apwz (InitFromFile2) or .bkp (InitFromArchive2).
+
+        A file already open in the GUI is attached instead of reopened. If
+        DCOM cannot start Aspen, AspenPlus.exe is launched directly.
+        """
+        path = os.path.abspath(path)
         self._log_trace("open_file", {"path": path}, "submitted")
-        self.call(lambda: self._app.InitFromFile(path))
+        if any(n.lower() == path.lower() for n in _rot_documents()):
+            return self.attach(path)
+        init = "InitFromArchive2" if path.lower().endswith(".bkp") else "InitFromFile2"
+        if not getattr(self, "_dcom_broken", False):
+            try:
+                if self._app is None:
+                    _COM.submit(self._connect, 150)
+                _COM.submit(lambda: getattr(self._app, init)(path), 600)
+                return path
+            except Exception as exc:
+                logger.warning("%s through DCOM failed (%s); launching AspenPlus.exe", init, exc)
+                self._dcom_broken = True
+                self._app = None
+        return self._launch_and_attach(path)
 
     def close_file(self):
         self._log_trace("close_file", {}, "submitted")
+        # A document attached from the GUI belongs to the user: only let go of it.
+        if getattr(self, "_attached", False):
+            self._app = None
+            self._attached = False
+            return
         # Close on COM thread and always clear the stale reference
         try:
             self.call(lambda: self._app.Close())
@@ -384,27 +484,49 @@ class AspenConnection:
         else:
             self.call(lambda: self._app.Save())
 
-        # ---------- engine execution (Run2 with built-in timeout) ----------
+        # ---------- engine execution (async Run2 + polling) ----------
 
-    _RUN_TIMEOUT_SECONDS = 45
+    def _run_and_wait(self, reinit: bool, max_seconds: float) -> float:
+        """Start the engine without blocking the COM thread, then poll IsRunning.
 
-    def run(self):
+        Each poll is a short COM call, so long runs never hit the per-call
+        timeout. Falls back to a blocking Run2 if async is not accepted.
+        """
+        def start():
+            if reinit:
+                self._app.Reinit()
+            try:
+                self._app.Engine.Run2(True)
+                return True
+            except Exception:
+                return False
+        t0 = time.time()
+        started_async = self.call(start)
+        if not started_async:
+            _COM.submit(lambda: self._app.Engine.Run2(), max_seconds)
+            return round(time.time() - t0, 1)
+        time.sleep(1)
+        while time.time() - t0 < max_seconds:
+            if not self.call(lambda: self._app.Engine.IsRunning):
+                return round(time.time() - t0, 1)
+            time.sleep(1)
+        self.call(lambda: self._app.Engine.Stop())
+        raise TimeoutError("run exceeded %ds and was stopped" % max_seconds)
+
+    def run(self, max_seconds: float = _RUN_MAX_SECONDS) -> float:
         self._log_trace("run", {}, "submitted")
-        self.call(lambda: self._app.Run2())
+        return self._run_and_wait(False, max_seconds)
 
     def run_async(self):
-        self.call(lambda: self._app.Engine.Run())
+        self.call(lambda: self._app.Engine.Run2(True))
 
     def reinit(self):
         self._log_trace("reinit", {}, "submitted")
-        self.call(lambda: self._app.Engine.Reinit())
+        self.call(lambda: self._app.Reinit())
 
-    def reinit_and_run(self):
+    def reinit_and_run(self, max_seconds: float = _RUN_MAX_SECONDS) -> float:
         self._log_trace("reinit_and_run", {}, "submitted")
-        def impl():
-            self._app.Engine.Reinit()
-            self._app.Run2()
-        self.call(impl)
+        return self._run_and_wait(True, max_seconds)
 
     def stop(self):
         self.call(lambda: self._app.Engine.Stop())

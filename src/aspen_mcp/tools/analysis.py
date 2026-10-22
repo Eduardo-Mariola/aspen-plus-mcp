@@ -325,6 +325,16 @@ def _get_convergence_report() -> str:
                 if diag:
                     lines.append(f"  [{bname}]:")
                     lines.extend(diag)
+    run_status = _walk(tree, "Data", "Results Summary", "Run-Status", "Output")
+    if run_status is not None:
+        status = []
+        for key in ("PER_ERROR", "PER_WARNING", "CVSTAT"):
+            node = _walk(run_status, key)
+            if node is not None and node.Value is not None:
+                status.append(f"{key}={node.Value}")
+        if status:
+            lines.insert(0, "Run status: " + "  ".join(status))
+    return "\n".join(lines)
 
 
 def tool_diagnose(keywords: list[str]) -> str:

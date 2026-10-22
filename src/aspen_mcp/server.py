@@ -14,6 +14,7 @@ from fastmcp import FastMCP
 from .com_bridge import aspen
 from .tools.simulation import (
     tool_status,
+    tool_attach,
     tool_open_file,
     tool_close_file,
     tool_run,
@@ -98,6 +99,20 @@ from .tools.columns import (
     tool_set_product_stage,
     tool_set_column_pressure,
 )
+from .tools.internals import (
+    tool_list_column_internals,
+    tool_add_column_internals,
+    tool_add_internals_section,
+    tool_remove_internals_section,
+    tool_configure_tray_section,
+    tool_configure_packed_section,
+    tool_set_internals_param,
+    tool_describe_internals_params,
+    tool_get_column_hydraulics,
+    tool_oconnell_efficiency,
+    tool_column_height_estimate,
+    tool_resize_column_stages,
+)
 from .tools.cache_tools import (
     tool_get_call_log,
     tool_clear_call_log,
@@ -158,8 +173,16 @@ def create_server() -> FastMCP:
 
     @mcp.tool()
     def open_file(file_path: str) -> str:
-        """Open an Aspen Plus .apw simulation file."""
+        """Open an Aspen Plus simulation (.apw/.apwz via InitFromFile2, .bkp via
+        InitFromArchive2). A file already open in the GUI is attached instead;
+        if DCOM cannot start Aspen, AspenPlus.exe is launched and attached."""
         return tool_open_file(file_path)
+
+    @mcp.tool()
+    def attach(file_path: str | None = None) -> str:
+        """Attach to a simulation already open in the Aspen Plus GUI (work live in
+        the user's window). Without a path, takes the first open document."""
+        return tool_attach(file_path)
 
     @mcp.tool()
     def close_file() -> str:
@@ -174,8 +197,8 @@ def create_server() -> FastMCP:
     def run() -> str:
         """Run the simulation.
 
-        Has 30-second timeout — if the engine hangs, it is stopped
-        and a "Timeout:" error is returned.
+        The engine runs asynchronously and is polled (up to 1 h), so slow
+        machines do not hit the COM call timeout.
         Before running, automatically checks feed streams for
         TEMP/PRES/composition. After run, checks BLKSTAT/BLKMSG.
         """
@@ -198,10 +221,9 @@ def create_server() -> FastMCP:
 
     @mcp.tool()
     def reinit_and_run() -> str:
-        """Reinitialize then run (with 30s timeout).
+        """Reinitialize then run (async run, polled up to 1 h).
 
-        If the simulation hangs, it is stopped automatically
-        and a "Timeout:" error is returned.
+        If the simulation exceeds the limit, it is stopped and an error is returned.
         Before running, automatically checks feed streams for
         TEMP/PRES/composition. After run, checks BLKSTAT/BLKMSG.
         """
@@ -809,6 +831,127 @@ def create_server() -> FastMCP:
         """
         return tool_set_column_pressure(block_name, top_pres, dp_stage)
 
+    # ── column internals (trays / packing, hydraulics, height) ───────────
+
+    @mcp.tool()
+    def list_column_internals(block_name: str, config: str | None = None) -> dict:
+        """Show a RadFrac's Column Internals: configurations, sections
+        (stages, tray/packing, spacing, diameter, deck, efficiency) and results."""
+        return tool_list_column_internals(block_name, config)
+
+    @mcp.tool()
+    def add_column_internals(block_name: str, config: str = "INT-1") -> str:
+        """Create a Column Internals configuration (INT-1...) and make it active."""
+        return tool_add_column_internals(block_name, config)
+
+    @mcp.tool()
+    def add_internals_section(block_name: str, section: str, stage_start: int,
+                              stage_end: int, internal_type: str = "TRAY",
+                              config: str | None = None) -> str:
+        """Add a section (e.g. CS-1, stages 2..N-1) to the active internals.
+
+        With a condenser the first tray is stage 2; with a kettle reboiler
+        the last tray is NSTAGE-1. internal_type: TRAY or PACKING.
+        """
+        return tool_add_internals_section(block_name, section, stage_start, stage_end,
+                                          internal_type, config)
+
+    @mcp.tool()
+    def remove_internals_section(block_name: str, section: str,
+                                 config: str | None = None) -> str:
+        """Remove a section from the Column Internals."""
+        return tool_remove_internals_section(block_name, section, config)
+
+    @mcp.tool()
+    def configure_tray_section(block_name: str, section: str, tray_type: str = "SIEVE",
+                               n_passes: int = 1, tray_spacing_m: float | None = None,
+                               mode: str = "INTER-SIZING", diameter_m: float | None = None,
+                               deck_thickness: str | None = None,
+                               deck_thickness_mm: float | None = None,
+                               weir_height_mm: float | None = None,
+                               hole_diameter_mm: float | None = None,
+                               hole_area_fraction: float | None = None,
+                               downcomer_clearance_mm: float | None = None,
+                               overall_efficiency: float | None = None,
+                               foaming_factor: float | None = None,
+                               update_pressure: bool | None = None,
+                               config: str | None = None) -> str:
+        """Set tray geometry for a section.
+
+        mode INTER-SIZING sizes the diameter for the flooding target;
+        RATING needs diameter_m and reports flooding / downcomer backup.
+        deck_thickness: '10 GAUGE' (carbon steel), '12 GAUGE', '14 GAUGE' (SS), 'OTHER'.
+        overall_efficiency = theoretical stages / real trays (sets tray count/height).
+        update_pressure=True lets the hydraulics set the column pressure profile.
+        """
+        return tool_configure_tray_section(
+            block_name, section, tray_type, n_passes, tray_spacing_m, mode, diameter_m,
+            deck_thickness, deck_thickness_mm, weir_height_mm, hole_diameter_mm,
+            hole_area_fraction, downcomer_clearance_mm, overall_efficiency,
+            foaming_factor, update_pressure, config)
+
+    @mcp.tool()
+    def configure_packed_section(block_name: str, section: str, packing_type: str,
+                                 vendor: str | None = None, material: str | None = None,
+                                 size: str | None = None,
+                                 packed_height_m: float | None = None,
+                                 hetp_m: float | None = None, mode: str = "INTER-SIZING",
+                                 diameter_m: float | None = None,
+                                 update_pressure: bool | None = None,
+                                 config: str | None = None) -> str:
+        """Set a packed section, e.g. MELLAPAK / SULZER / STANDARD / 250Y."""
+        return tool_configure_packed_section(block_name, section, packing_type, vendor,
+                                             material, size, packed_height_m, hetp_m, mode,
+                                             diameter_m, update_pressure, config)
+
+    @mcp.tool()
+    def set_internals_param(block_name: str, section: str | None, param: str,
+                            value: str | float | int, config: str | None = None) -> str:
+        """Set any Column Internals input CA_xxx (section-level, or config-level
+        when section is None). Options are validated against Aspen's list."""
+        return tool_set_internals_param(block_name, section, param, value, config)
+
+    @mcp.tool()
+    def describe_internals_params(block_name: str, name_filter: str = "",
+                                  config: str | None = None) -> list[dict]:
+        """List CA_xxx internals inputs with Aspen's description, unit, options
+        and current value (filter by substring, e.g. 'WEIR', 'DC', 'DECK')."""
+        return tool_describe_internals_params(block_name, name_filter, config)
+
+    @mcp.tool()
+    def get_column_hydraulics(block_name: str, config: str | None = None,
+                              per_stage: bool = False) -> dict:
+        """Column Internals results per section (diameter, % flood, downcomer
+        backup, pressure drop, height); per_stage=True adds stage profiles."""
+        return tool_get_column_hydraulics(block_name, config, per_stage)
+
+    @mcp.tool()
+    def oconnell_efficiency(block_name: str, light_key: str, heavy_key: str,
+                            stage_from: int | None = None,
+                            stage_to: int | None = None) -> dict:
+        """Overall tray efficiency by O'Connell from the converged profiles
+        (alpha LK/HK and liquid viscosity), with the real tray count."""
+        return tool_oconnell_efficiency(block_name, light_key, heavy_key,
+                                        stage_from, stage_to)
+
+    @mcp.tool()
+    def column_height_estimate(block_name: str, top_space_m: float = 1.0,
+                               bottom_space_m: float | None = None,
+                               sump_residence_min: float = 5.0,
+                               feed_extra_spacing: float = 0.5,
+                               config: str | None = None) -> dict:
+        """Tangent-to-tangent height and L/D from the internals (trays from
+        CA_EFF and spacing, packed heights, top space and a sized sump)."""
+        return tool_column_height_estimate(block_name, top_space_m, bottom_space_m,
+                                           sump_residence_min, feed_extra_spacing, config)
+
+    @mcp.tool()
+    def resize_column_stages(block_name: str, nstage: int,
+                             feed_stages: dict[str, int] | None = None,
+                             update_internals: bool = True) -> str:
+        """Change NSTAGE and keep feed/product stages and internals sections consistent."""
+        return tool_resize_column_stages(block_name, nstage, feed_stages, update_internals)
+
         # -- sensitivity advanced ------------------------------------------------
 
     @mcp.tool()
@@ -836,7 +979,7 @@ def create_server() -> FastMCP:
 
     @mcp.tool()
     def set_label(path: str, index: int, label: str, dimension: int = 0) -> str:
-        """Set a label on a table-type node at a given dimension and index.
+        r"""Set a label on a table-type node at a given dimension and index.
 
         Used for setting row/column labels in 2D tables (e.g. COEF, COEF1, CONV).
         Example: set_label(r'Data\Blocks\R1\Input\CONV', index=0, label='1')
