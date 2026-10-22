@@ -169,11 +169,19 @@ def tool_status() -> dict:
     return aspen.status()
 
 
-def tool_open_file(file_path: str) -> str:
-    """Open an Aspen Plus simulation .apw file."""
+def tool_attach(file_path: str | None = None) -> str:
+    """Attach to a simulation already open in the Aspen Plus GUI."""
     try:
-        aspen.open_file(file_path)
-        return "Opened " + file_path
+        return "Attached to " + aspen.attach(file_path)
+    except Exception as exc:
+        return "Error: " + str(exc)
+
+
+def tool_open_file(file_path: str) -> str:
+    """Open an Aspen Plus simulation (.apw/.apwz/.bkp)."""
+    try:
+        opened = aspen.open_file(file_path)
+        return "Opened " + str(opened or file_path)
     except Exception as exc:
         exc_str = str(exc)
         if "32" in exc_str and ("being used" in exc_str.lower() or chr(214) in exc_str):
@@ -198,9 +206,9 @@ def tool_run() -> str:
         feed_ok = _check_feeds_before_run()
         if feed_ok:
             return feed_ok
-        aspen.run()
+        secs = aspen.run()
         report = aspen.call(lambda: _get_convergence_report())
-        result = "Simulation run completed.\n\n" + (report or "")
+        result = f"Simulation run completed in {secs} s.\n\n" + (report or "")
         warning = _check_all_uncalculated()
         if warning:
             result += "\n\n" + warning
@@ -249,9 +257,9 @@ def tool_reinit_and_run() -> str:
         feed_ok = _check_feeds_before_run()
         if feed_ok:
             return feed_ok
-        aspen.reinit_and_run()
+        secs = aspen.reinit_and_run()
         report = aspen.call(lambda: _get_convergence_report())
-        result = "Simulation reinitialized and run completed.\n\n" + (report or "")
+        result = f"Simulation reinitialized and run completed in {secs} s.\n\n" + (report or "")
         warning = _check_all_uncalculated()
         if warning:
             result += "\n\n" + warning
@@ -276,8 +284,7 @@ def tool_new_simulation() -> str:
             aspen.close_file()
         except Exception:
             pass
-        _work_path = "C:\\Users\\34158\\reasonix\\desktop\\build\\bin\\aspen_blank_" + str(os.getpid()) + ".apw"
-        import shutil
+        _work_path = os.path.join(tempfile.gettempdir(), "aspen_blank_" + str(os.getpid()) + ".apw")
         shutil.copy2(_TEMPLATE, _work_path)
         aspen.open_file(_work_path)
         return ("New blank simulation created.\n"
